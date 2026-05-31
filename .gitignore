@@ -1,0 +1,10 @@
+﻿.venv/
+venv/
+__pycache__/
+*.pyc
+preparar_demo.py
+*_BACKUP.sqlite
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+run.log
