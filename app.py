@@ -1,19 +1,25 @@
 """
 app.py
 ------
-Aplicación única en Streamlit que integra DOS entregas sobre la misma base de
+Aplicación única en Streamlit que integra un dashboard sobre la misma base de
 datos SQLite de revistas Q1 (revista 'Machine Learning and Knowledge Extraction',
-MDPI) construida en el Taller 1.
+MDPI) construida en el Taller 1. La aplicación tiene tres pestañas:
 
-  Pestaña 1 — Dashboard (Taller 2, Minería de Datos):
+  Pestaña 1 — Información general de la revista y del web scraping:
+      descripción de la revista MAKE (Q1, MDPI, ISSN 2504-4990), explicación
+      de cómo se organizan los volúmenes e issues, y conteo de artículos
+      almacenados por volumen e issue.
+
+  Pestaña 2 — Dashboard:
       conexión SQLite, sidebar con filtros, widgets, indicadores,
       visualizaciones Plotly, tabla interactiva y scraping de nuevos artículos.
 
-  Pestaña 2 — Proyecto Final (clustering no supervisado):
+  Pestaña 3 — Clustering no supervisado:
       segmentación de artículos con K-means vs jerárquico, codo + silhouette,
       perfilado de clusters, proyección PCA y conclusiones.
 """
 
+import re
 import sqlite3
 from datetime import datetime
 
@@ -32,11 +38,10 @@ import scraper  # módulo de scraping (botón de actualización)
 DB_PATH = "make_q1_2025.sqlite"
 
 st.set_page_config(
-    page_title="Revistas Q1 — Minería de Datos",
+    page_title="Revista MAKE (Machine Learning and Knowledge Extraction) — Análisis y Clustering",
     page_icon="📊",
     layout="wide",
 )
-
 
 import os
 
@@ -157,17 +162,184 @@ df_f = aplicar_filtros(df)
 # ===========================================================================
 # ENCABEZADO + PESTAÑAS
 # ===========================================================================
-st.title("📊 Revistas Q1 — Minería de Datos")
+st.title("📊 Revista MAKE (Machine Learning and Knowledge Extraction) — Análisis y Clustering")
 st.markdown(
     "Artículos de **Machine Learning**, **IA Generativa** y **Estadística** "
-    "almacenados en SQLite (Taller 1)."
+    "almacenados en SQLite."
+)
+st.markdown(
+"By: Daniela Roncancio Gomez"
 )
 
-tab_dash, tab_cluster = st.tabs(["📈 Dashboard (Taller 2)", "🧩 Proyecto Final — Clustering"])
+tab_info, tab_dash, tab_cluster = st.tabs([
+    "📖 Información",
+    "📈 Dashboard",
+    "🧩 Clustering",
+])
 
 
 # ===========================================================================
-# PESTAÑA 1 — DASHBOARD (TALLER 2)
+# PESTAÑA 0 — INFORMACIÓN DE LA REVISTA
+# ===========================================================================
+with tab_info:
+    st.subheader("📖 Sobre la revista y los datos")
+ 
+    st.markdown(
+        "**Machine Learning and Knowledge Extraction (MAKE)** es una revista "
+        "científica de acceso abierto publicada por **MDPI**, clasificada en el "
+        "**cuartil Q1**. Se especializa en aprendizaje automático, extracción de "
+        "conocimiento, inteligencia artificial y temas afines. Su ISSN es "
+        "**2504-4990** y publica de forma continua a lo largo del año.\n\n"
+        "En **MDPI**, cada año corresponde a un **volumen**, y cada volumen se "
+        "divide en varios **issues** (números), normalmente uno por mes. Cada "
+        "issue agrupa los artículos publicados en ese periodo."
+    )
+ 
+    st.markdown("#### ¿Cómo se hizo la recolección de los datos?") 
+
+    st.markdown(
+        "En esta etapa se obtiene información de los artículos publicados en el "
+        "año 2025 en la revista científica **Machine Learning and Knowledge "
+        "Extraction (MAKE)** (https://www.mdpi.com/2504-4990/7/4). Esta es una "
+        "revista de acceso abierto, que cubre investigaciones en áreas como el "
+        "aprendizaje automático, la extracción de conocimiento y otras "
+        "relacionadas con la inteligencia artificial basada en datos.\n\n"
+        "Para el desarrollo de esta fase, se seleccionó el **Volumen 7**, el cual "
+        "contiene un total de **61 artículos**. A partir de estos artículos, se "
+        "recolectó la siguiente información:"
+    )
+
+    st.markdown(
+        "- Título de la revista\n"
+        "- Título del artículo\n"
+        "- Fecha de publicación\n"
+        "- Año\n"
+        "- DOI\n"
+        "- URL del artículo\n"
+        "- Autores\n"
+        "- Resumen\n"
+        "- Número de visualizaciones\n"
+        "- Número de páginas\n"
+        "- Número de citas\n"
+        "- Número de referencias\n"
+        "- Referencias"
+    )
+    
+    st.markdown(
+        "La recolección se realizó mediante **web scraping** con Python, usando las "
+        "librerías **requests** (para descargar las páginas) y **BeautifulSoup** "
+        "(para extraer la información del HTML). El proceso siguió estos pasos:"
+    )
+    st.markdown(
+        "1. Se accedió al índice del **Volumen 7** de la revista en el sitio de MDPI.\n"
+        "2. Se recorrió cada artículo listado, extrayendo sus metadatos "
+        "(título, autores, fecha, DOI, resumen, citas, referencias y visualizaciones).\n"
+        "3. La información se limpió y estructuró en un **DataFrame** de pandas.\n"
+        "4. Finalmente, los datos se almacenaron en una base de datos **SQLite** "
+        "para su posterior consulta y análisis."
+    )
+
+    st.info(
+        "**Nota:** Como no se cuenta con la variable *Descargas*, se hace uso del "
+        "*Número de visualizaciones* en su defecto."
+    )
+
+    st.markdown("#### Actualización: artículos de 2026")
+    st.markdown(
+        "Además de los datos del Taller 1 (Volumen 7, año 2025), el dashboard "
+        "permite **actualizar la base con artículos nuevos** del **Volumen 8 (2026)** "
+        "mediante el botón *Buscar artículos nuevos* en el panel lateral.\n\n"
+        "Para esta actualización **no se hace scraping directo al sitio de MDPI**, "
+        "ya que su servidor bloquea las peticiones automáticas (error HTTP 403). "
+        "En su lugar se consultan **APIs públicas de metadatos académicos**:"
+    )
+    st.markdown(
+        "- **Crossref** (fuente principal): API abierta y gratuita que se consulta "
+        "por el ISSN de la revista y permite filtrar por fecha, recuperando todos "
+        "los artículos nuevos de 2026 (de todos los issues del volumen).\n"
+        "- **OpenAlex** (respaldo): si Crossref falla, se consulta esta segunda API, "
+        "que además aporta el número de citas.\n\n"
+        "El sistema compara los **DOI** obtenidos contra los ya almacenados e "
+        "inserta únicamente los artículos nuevos en la base **SQLite**. Si no hay "
+        "artículos nuevos, verifica los últimos cinco almacenados para actualizar "
+        "sus métricas."
+    )
+
+    st.markdown(
+        "La siguiente tabla resume los **200 artículos** almacenados en la base de "
+        "datos, distribuidos por **volumen** (año) e **issue** (número) de la "
+        "revista. Los **61 artículos** del **Volumen 7 (2025)** corresponden a la "
+        "recolección inicial del Taller 1, mientras que los **139 artículos** del "
+        "**Volumen 8 (2026)** (https://www.mdpi.com/2504-4990/8) se incorporaron mediante la actualización automática "
+        "con las APIs de Crossref y OpenAlex. El gráfico de barras acompaña la tabla "
+        "mostrando visualmente cuántos artículos hay en cada issue."
+    )
+
+    # --- Conteo real de artículos por volumen e issue (desde la BD) ---
+    def extraer_vol_issue(doi):
+        if not isinstance(doi, str):
+            return (None, None)
+        m = re.search(r"make(\d)(\d{2})\d+", doi)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+        return (None, None)
+
+    info_df = df.copy()
+    info_df[["volumen", "issue"]] = info_df["doi"].apply(
+        lambda d: pd.Series(extraer_vol_issue(d))
+    )
+
+    # Mapa de año por volumen (vol 7 = 2025, vol 8 = 2026, etc.)
+    def vol_a_anio(v):
+        return 2018 + int(v) if pd.notna(v) else None
+
+    st.markdown("#### Artículos por volumen e issue")
+
+    resumen = (
+        info_df.dropna(subset=["volumen", "issue"])
+        .groupby(["volumen", "issue"])
+        .size()
+        .reset_index(name="N° de artículos")
+    )
+    resumen["volumen"] = resumen["volumen"].astype(int)
+    resumen["issue"] = resumen["issue"].astype(int)
+    resumen["Año"] = resumen["volumen"].apply(vol_a_anio)
+    resumen = resumen.rename(columns={"volumen": "Volumen", "issue": "Issue"})
+    resumen = resumen[["Volumen", "Año", "Issue", "N° de artículos"]].sort_values(
+        ["Volumen", "Issue"]
+    )
+
+    col_t, col_g = st.columns([1, 1])
+    with col_t:
+        st.dataframe(resumen, use_container_width=True, hide_index=True)
+    with col_g:
+        fig_info = px.bar(
+            resumen,
+            x="Issue",
+            y="N° de artículos",
+            color="Volumen",
+            barmode="group",
+            title="Artículos por issue y volumen",
+        )
+        st.plotly_chart(fig_info, use_container_width=True)
+
+    # Totales por volumen
+    tot_vol = (
+        resumen.groupby(["Volumen", "Año"])["N° de artículos"].sum().reset_index()
+    )
+    partes = [
+        f"Vol. {int(row['Volumen'])} ({int(row['Año'])}): "
+        f"{int(row['N° de artículos'])} artículos"
+        for _, row in tot_vol.iterrows()
+    ]
+    resumen_txt = " · ".join(partes)
+    st.info(
+        f"**Total en la base: {contar_papers_en_bd()} artículos.**  \n{resumen_txt}"
+    )
+
+
+# ===========================================================================
+# PESTAÑA 1 — DASHBOARD
 # ===========================================================================
 with tab_dash:
 
@@ -322,17 +494,17 @@ with tab_dash:
 
 
 # ===========================================================================
-# PESTAÑA 2 — PROYECTO FINAL (CLUSTERING)
+# PESTAÑA 2 — PROYECTO FINAL
 # ===========================================================================
 with tab_cluster:
     st.subheader("🧩 Segmentación de artículos (clustering no supervisado)")
+    st.markdown("##### ¿Qué segmentos naturales existen entre los artículos?")
     st.markdown(
-        "**Pregunta:** ¿Qué segmentos naturales existen entre los artículos según su "
-        "impacto y características (citas, vistas, autores, referencias)?\n\n"
-        "Se comparan **K-means** y **clustering jerárquico**, eligiendo el número de "
-        "clusters con el método del codo y el coeficiente de *silhouette*."
+        "Análisis según su impacto y características (citas, vistas, autores, "
+        "referencias). Se comparan **K-means** y **clustering jerárquico**, "
+        "eligiendo el número de clusters con el método del codo y el "
+        "coeficiente de *silhouette*."
     )
-
     features = ["citations", "popularidad", "n_authors", "n_references"]
 
     # Datos para clustering (sobre TODA la base, no filtrada)
@@ -459,4 +631,3 @@ with tab_cluster:
             "clusters con mis datos y reescribí las conclusiones."
         )
 
-st.caption("Minería de Datos · Streamlit + SQLite · Taller 2 + Proyecto Final")
