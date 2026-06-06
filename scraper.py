@@ -4,20 +4,21 @@ scraper.py
 Adquisición de artículos nuevos de la revista Q1 'Machine Learning and
 Knowledge Extraction' (MDPI, ISSN 2504-4990) para actualizar la base SQLite.
 
-IMPORTANTE — por qué APIs y no scraping del HTML:
-    El sitio web de MDPI (mdpi.com) tiene protección anti-bots y devuelve
-    HTTP 403 ante peticiones automatizadas. La solución correcta y estable es
-    usar las APIs oficiales de metadatos académicos, que son públicas, gratuitas
-    y están pensadas justamente para esto:
+ESTRATEGIA (Selenium con respaldo de APIs):
+    1) Selenium (navegador real): recorre las páginas de los issues del
+       Volumen 8 (2026) en MDPI, igual que el Taller 1 hizo en R con
+       read_html_live. Extrae título, autores, fecha, DOI, resumen y, sobre
+       todo, el número de VISTAS ("Viewed by"), que solo está en MDPI.
+       Funciona en local (donde hay navegador Chrome instalado).
 
-      1) Crossref  (https://api.crossref.org)  -> fuente principal
-      2) OpenAlex  (https://api.openalex.org)  -> respaldo + nº de citas
+    2) APIs de respaldo (Crossref + OpenAlex): si Selenium no está disponible
+       (p. ej. en Streamlit Cloud, que no tiene navegador) o falla, se usan
+       estas APIs públicas. No traen vistas, pero sí citas y metadatos.
 
-    Ambas se consultan por el ISSN de la revista y permiten filtrar por fecha,
-    así que recogen TODOS los artículos nuevos (todos los issues del volumen
-    2026) sin tener que recorrer el HTML issue por issue.
+    Así la app funciona en los dos entornos: completa en local, parcial online.
 """
 
+import re
 import time
 import sqlite3
 from datetime import datetime
@@ -199,6 +200,153 @@ def _crossref_item_to_paper(item: dict) -> dict | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Fuente principal: Selenium (navegador real, igual que read_html_live en R)
+# ---------------------------------------------------------------------------
+# Volumen 8 = 2026. Issues 1 a 6 según la portada de la revista.
+VOLUMEN_2026 = 8
+ISSUES_2026 = [1, 2, 3, 4, 5, 6]
+
+
+def selenium_disponible() -> bool:
+    """Comprueba si Selenium y un navegador están instalados."""
+    try:
+        import selenium  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _crear_driver():
+    """Crea un navegador Chrome headless. Lanza excepción si no se puede."""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+    return webdriver.Chrome(options=opts)
+
+
+def _parsear_nodo(nodo) -> dict | None:
+    """
+    Extrae los datos de un nodo de artículo (div.generic-item.article-item),
+    replicando la función extraer_articulo() del Taller 1 en R.
+    """
+    from selenium.webdriver.common.by import By
+
+    def _texto(sel):
+        try:
+            return nodo.find_element(By.CSS_SELECTOR, sel).text.strip()
+        except Exception:
+            return None
+
+    def _attr(sel, attr):
+        try:
+            return nodo.find_element(By.CSS_SELECTOR, sel).get_attribute(attr)
+        except Exception:
+            return None
+
+    titulo = _texto("a.title-link")
+    if not titulo:
+        return None
+
+    # Autores
+    try:
+        autores_els = nodo.find_elements(By.CSS_SELECTOR, "div.authors strong")
+        autores = "; ".join(a.text.strip() for a in autores_els if a.text.strip())
+    except Exception:
+        autores = None
+    n_authors = float(len(autores.split(";"))) if autores else None
+
+    # DOI y URL
+    href_doi = _attr("a[href*='doi.org']", "href")
+    doi = href_doi.replace("https://doi.org/", "") if href_doi else None
+    href_art = _attr("a.title-link", "href")
+    art_url = ("https://www.mdpi.com" + href_art) if href_art and href_art.startswith("/") else href_art
+
+    # Texto completo del nodo, para extraer vistas, citas y fecha por regex
+    texto_completo = nodo.text or ""
+
+    m_views = re.search(r"Viewed by ([\d,]+)", texto_completo)
+    views = int(m_views.group(1).replace(",", "")) if m_views else None
+
+    m_cited = re.search(r"Cited by (\d+)", texto_completo)
+    citations = int(m_cited.group(1)) if m_cited else 0
+
+    m_fecha = re.search(r"(\d{1,2} \w+ \d{4})", texto_completo)
+    pub_date = m_fecha.group(1) if m_fecha else None
+    year = None
+    if pub_date:
+        my = re.search(r"(\d{4})", pub_date)
+        if my:
+            year = int(my.group(1))
+
+    abstract = _texto(".abstract-full")
+    if abstract:
+        abstract = re.sub(r"Full article$", "", abstract).strip()
+
+    topic = classify_topic(f"{titulo} {abstract or ''}")
+
+    return {
+        "journal_name": JOURNAL_NAME,
+        "title": titulo,
+        "publication_date": pub_date,
+        "year": year,
+        "doi": doi,
+        "url": art_url,
+        "abstract": abstract,
+        "authors_raw": autores,
+        "n_authors": n_authors,
+        "citations": citations,
+        "downloads": None,
+        "views": views,
+        "n_references": None,
+        "topic_label": topic,
+    }
+
+
+def fetch_selenium(issues=None, progress_callback=None) -> list[dict]:
+    """
+    Recorre los issues del Volumen 8 (2026) con un navegador real y extrae los
+    artículos, incluyendo VISTAS y CITAS que solo están en la página de MDPI.
+
+    Lanza excepción si Selenium/Chrome no están disponibles (la maneja la
+    función principal para caer al respaldo de APIs).
+    """
+    from selenium.webdriver.common.by import By
+
+    if issues is None:
+        issues = ISSUES_2026
+
+    driver = _crear_driver()
+    papers = []
+    try:
+        for idx, issue in enumerate(issues):
+            url = f"https://www.mdpi.com/{ISSN}/{VOLUMEN_2026}/{issue}"
+            if progress_callback:
+                progress_callback(idx + 1, len(issues), url)
+            driver.get(url)
+            time.sleep(4)  # esperar a que cargue el JS (como Sys.sleep en R)
+            nodos = driver.find_elements(
+                By.CSS_SELECTOR, "div.generic-item.article-item"
+            )
+            for nodo in nodos:
+                p = _parsear_nodo(nodo)
+                if p and p.get("doi"):
+                    papers.append(p)
+    finally:
+        driver.quit()
+    return papers
+
+
 def fetch_crossref(from_date: str = "2026-01-01", rows: int = 200) -> list[dict]:
     """
     Trae artículos de la revista (por ISSN) publicados desde from_date.
@@ -301,22 +449,37 @@ def buscar_nuevos_articulos(
     fuente = None
     error = None
 
-    # 1) Intentar Crossref, si falla usar OpenAlex
+    # 1) Intentar Selenium (trae vistas y citas reales de MDPI).
+    #    Si no hay navegador o falla, caer a las APIs (Crossref -> OpenAlex).
     candidatos = []
-    try:
-        log.append("Consultando Crossref API...")
-        candidatos = fetch_crossref(from_date=from_date)
-        fuente = "Crossref"
-        log.append(f"  Crossref devolvió {len(candidatos)} artículo(s) desde {from_date}.")
-    except Exception as e:
-        log.append(f"  Crossref falló ({e}). Probando OpenAlex...")
+    if selenium_disponible():
         try:
-            candidatos = fetch_openalex(from_date=from_date)
-            fuente = "OpenAlex"
-            log.append(f"  OpenAlex devolvió {len(candidatos)} artículo(s).")
-        except Exception as e2:
-            error = f"Ambas APIs fallaron. Crossref: {e}. OpenAlex: {e2}."
-            log.append(f"  ⚠️ {error}")
+            log.append("Intentando scraping con navegador (Selenium)...")
+            candidatos = fetch_selenium(progress_callback=progress_callback)
+            fuente = "Selenium (MDPI)"
+            log.append(f"  Selenium extrajo {len(candidatos)} artículo(s) de MDPI.")
+        except Exception as e:
+            log.append(f"  Selenium no disponible o falló ({e}). Usando APIs...")
+            candidatos = []
+    else:
+        log.append("Selenium no instalado. Usando APIs de metadatos...")
+
+    # Respaldo: si Selenium no trajo nada, usar Crossref y luego OpenAlex
+    if not candidatos:
+        try:
+            log.append("Consultando Crossref API...")
+            candidatos = fetch_crossref(from_date=from_date)
+            fuente = "Crossref"
+            log.append(f"  Crossref devolvió {len(candidatos)} artículo(s) desde {from_date}.")
+        except Exception as e:
+            log.append(f"  Crossref falló ({e}). Probando OpenAlex...")
+            try:
+                candidatos = fetch_openalex(from_date=from_date)
+                fuente = "OpenAlex"
+                log.append(f"  OpenAlex devolvió {len(candidatos)} artículo(s).")
+            except Exception as e2:
+                error = f"Ambas APIs fallaron. Crossref: {e}. OpenAlex: {e2}."
+                log.append(f"  ⚠️ {error}")
 
     # 2) Insertar los que no existan
     total = len(candidatos)

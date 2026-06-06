@@ -225,40 +225,46 @@ with tab_info:
         "- Referencias"
     )
     
-    st.markdown(
-        "La recolección se realizó mediante **web scraping** con Python, usando las "
-        "librerías **requests** (para descargar las páginas) y **BeautifulSoup** "
-        "(para extraer la información del HTML). El proceso siguió estos pasos:"
-    )
-    st.markdown(
-        "1. Se accedió al índice del **Volumen 7** de la revista en el sitio de MDPI.\n"
-        "2. Se recorrió cada artículo listado, extrayendo sus metadatos "
-        "(título, autores, fecha, DOI, resumen, citas, referencias y visualizaciones).\n"
-        "3. La información se limpió y estructuró en un **DataFrame** de pandas.\n"
-        "4. Finalmente, los datos se almacenaron en una base de datos **SQLite** "
-        "para su posterior consulta y análisis."
-    )
-
     st.info(
         "**Nota:** Como no se cuenta con la variable *Descargas*, se hace uso del "
         "*Número de visualizaciones* en su defecto."
     )
+    st.markdown(
+        "La recolección se realizó mediante **web scraping** con **R**, usando "
+        "principalmente la librería **rvest** (con `read_html_live` para cargar "
+        "páginas dinámicas) junto a **dplyr**, **stringr** y **purrr** para "
+        "procesar la información. El proceso siguió estos pasos:"
+    )
+    st.markdown(
+        "1. Se estableció conexión con la página del **Volumen 7, número 4 "
+        "(diciembre 2025)** de la revista en MDPI y se verificó que contenía "
+        "**61 artículos**.\n"
+        "2. Se recorrió cada artículo extrayendo sus metadatos: título, autores, "
+        "fecha, DOI, URL, resumen y número de visualizaciones.\n"
+        "3. Para complementar la información bibliométrica se consultaron dos APIs "
+        "externas: **Semantic Scholar** (conteo de citas y referencias) y "
+        "**CrossRef** (texto completo de las referencias).\n"
+        "4. Toda la información se consolidó en *dataframes* y se almacenó en una "
+        "base de datos **SQLite** mediante los paquetes **DBI** y **RSQLite**."
+    )
+
 
     st.markdown("#### Actualización: artículos de 2026")
     st.markdown(
         "Además de los datos del Taller 1 (Volumen 7, año 2025), el dashboard "
         "permite **actualizar la base con artículos nuevos** del **Volumen 8 (2026)** "
-        "mediante el botón *Buscar artículos nuevos* en el panel lateral.\n\n"
-        "Para esta actualización **no se hace scraping directo al sitio de MDPI**, "
-        "ya que su servidor bloquea las peticiones automáticas (error HTTP 403). "
-        "En su lugar se consultan **APIs públicas de metadatos académicos**:"
+        "mediante el botón *Buscar artículos nuevos* en el panel lateral. La "
+        "actualización combina dos estrategias:"
     )
     st.markdown(
-        "- **Crossref** (fuente principal): API abierta y gratuita que se consulta "
-        "por el ISSN de la revista y permite filtrar por fecha, recuperando todos "
-        "los artículos nuevos de 2026 (de todos los issues del volumen).\n"
-        "- **OpenAlex** (respaldo): si Crossref falla, se consulta esta segunda API, "
-        "que además aporta el número de citas.\n\n"
+        "- **Selenium (método principal):** abre un navegador real que recorre los "
+        "issues del Volumen 8 en el sitio de MDPI y extrae los metadatos de cada "
+        "artículo, incluyendo el número de **visualizaciones** y **citas**, datos "
+        "que solo están disponibles en la página de la revista.\n"
+        "- **APIs de respaldo (Crossref y OpenAlex):** si el navegador no está "
+        "disponible (por ejemplo, en un despliegue en la nube) o el sitio bloquea "
+        "el acceso, se consultan estas APIs públicas de metadatos académicos. No "
+        "aportan visualizaciones, pero sí los metadatos básicos y las citas.\n\n"
         "El sistema compara los **DOI** obtenidos contra los ya almacenados e "
         "inserta únicamente los artículos nuevos en la base **SQLite**. Si no hay "
         "artículos nuevos, verifica los últimos cinco almacenados para actualizar "
@@ -266,7 +272,7 @@ with tab_info:
     )
 
     st.markdown(
-        "La siguiente tabla resume los **200 artículos** almacenados en la base de "
+        "La siguiente tabla resume los **213 artículos** almacenados en la base de "
         "datos, distribuidos por **volumen** (año) e **issue** (número) de la "
         "revista. Los **61 artículos** del **Volumen 7 (2025)** corresponden a la "
         "recolección inicial del Taller 1, mientras que los **139 artículos** del "
@@ -339,9 +345,21 @@ with tab_info:
 
 
 # ===========================================================================
-# PESTAÑA 1 — DASHBOARD
+# PESTAÑA 1 — DASHBOARD 
 # ===========================================================================
 with tab_dash:
+
+    st.markdown(
+        "Em esta pertaña se va a explorar, filtrar y visualizar los artículos "
+        "almacenados en la base **SQLite**, siguiendo el proceso **KDD** "
+        "(Knowledge Discovery in Databases). Incluye filtros por fechas, tema, "
+        "autor, DOI y palabras clave. Los indicadores descriptivos muestran el "
+        "total de artículos, promedios de autores, citas y referencias, y los "
+        "artículos más citados y vistos. Las visualizaciones interactivas "
+        "(**Plotly**) cubren la evolución temporal de publicaciones, artículos "
+        "por categoría, distribución de citas y top de autores. También incluye "
+        "una tabla interactiva descargable en **CSV**."
+    )
 
     # ---- Acción: scraping ----
     if buscar:
@@ -350,7 +368,7 @@ with tab_dash:
         def cb(i, total, url):
             progress.progress(i / total, text=f"Revisando {i}/{total}: {url[-30:]}")
 
-        with st.spinner("Consultando Crossref / OpenAlex..."):
+        with st.spinner("Buscando artículos nuevos (MDPI / Crossref / OpenAlex)..."):
             try:
                 res = scraper.buscar_nuevos_articulos(DB_PATH, progress_callback=cb)
             except Exception as e:
@@ -494,17 +512,42 @@ with tab_dash:
 
 
 # ===========================================================================
-# PESTAÑA 2 — PROYECTO FINAL
+# PESTAÑA 2 — CLUSTERING
 # ===========================================================================
 with tab_cluster:
     st.subheader("🧩 Segmentación de artículos (clustering no supervisado)")
-    st.markdown("##### ¿Qué segmentos naturales existen entre los artículos?")
+
+    st.markdown("#### ¿Qué se analiza y por qué es interesante?")
     st.markdown(
-        "Análisis según su impacto y características (citas, vistas, autores, "
-        "referencias). Se comparan **K-means** y **clustering jerárquico**, "
-        "eligiendo el número de clusters con el método del codo y el "
-        "coeficiente de *silhouette*."
+        "Se analiza el conjunto de artículos científicos de la revista **MAKE** "
+        "(Machine Learning and Knowledge Extraction) almacenados en la base de "
+        "datos SQLite, con el objetivo de identificar **segmentos naturales** "
+        "entre los artículos según su impacto y características estructurales "
+        "(citas, visualizaciones, número de autores y número de referencias).\n\n"
+        "Esto es interesante porque la revista publica artículos muy heterogéneos: "
+        "algunos acumulan muchas citas, otros muchas vistas, otros son trabajos "
+        "extensos con muchas referencias. Identificar estos perfiles **sin imponer "
+        "categorías a priori** permite descubrir patrones reales de publicación, "
+        "como por ejemplo grupos de artículos de *alto impacto*, de *alta "
+        "visibilidad* o de *producción estándar*."
     )
+    st.markdown("#### Enfoque elegido: Clustering (aprendizaje no supervisado)")
+    st.markdown(
+        "Se eligió el enfoque de **clustering** porque no se dispone de una "
+        "etiqueta objetivo predefinida (no hay una columna que diga si un artículo "
+        "es 'bueno' o 'malo'), y el interés está en **descubrir estructura latente** "
+        "en los datos, no en predecir un valor conocido.\n\n"
+        "Se comparan dos algoritmos:\n"
+        "- **K-means:** agrupa los artículos minimizando la varianza dentro de cada "
+        "cluster. Es eficiente y ampliamente usado como línea base.\n"
+        "- **Clustering jerárquico (Ward):** construye una jerarquía de grupos de "
+        "abajo hacia arriba. No asume forma esférica de los clusters y es útil para "
+        "confirmar que la estructura encontrada por K-means es robusta.\n\n"
+        "El modelo final se selecciona según el **coeficiente de silhouette** "
+        "(mayor = mejor separación entre clusters), y la concordancia entre ambos "
+        "algoritmos se mide con el **Adjusted Rand Index (ARI)**."
+    )
+
     features = ["citations", "popularidad", "n_authors", "n_references"]
 
     # Datos para clustering (sobre TODA la base, no filtrada)
@@ -537,7 +580,7 @@ with tab_cluster:
 
     best_k = K_range[int(np.argmax(sils))]
     K = best_k if modo_k.startswith("Auto") else k_manual
-
+ 
     with col_b:
         df_codo = pd.DataFrame({"k": K_range, "Inercia": inertias, "Silhouette": sils})
         fig_codo = px.line(df_codo, x="k", y="Inercia", markers=True,
@@ -574,6 +617,28 @@ with tab_cluster:
     dfc["cluster"] = dfc["cluster"].astype(str)
     st.success(f"Modelo final seleccionado (mejor silhouette): **{modelo_final}**")
 
+    st.markdown(
+    "**Interpretación del codo:** la inercia baja de forma marcada de k=2 a "
+    "k=4, y luego la curva se aplana. Esto sugiere que agregar más de 2 o 3 "
+    "clusters no aporta una reducción significativa de la varianza interna, "
+    "por lo que el codo visual apunta a **k=2** como valor óptimo."
+    )
+
+    st.markdown(
+        "**Interpretación del silhouette:** el coeficiente es máximo en **k=2** "
+        "(≈0.59), lo que confirma que con dos grupos los artículos están mejor "
+        "separados entre sí. A partir de k=3 el coeficiente cae abruptamente, "
+        "indicando que dividir en más clusters produce grupos menos cohesivos."
+    )
+
+    st.markdown(
+        "Ambos algoritmos obtienen un silhouette similar (~0.59), lo que indica "
+        "que la estructura de dos grupos es robusta e independiente del método. "
+        "El **ARI de 0.828** confirma una alta concordancia entre K-means y el "
+        "clustering jerárquico: los dos están encontrando prácticamente la misma "
+        "partición. Se selecciona el **Jerárquico** como modelo final por tener "
+        "un silhouette ligeramente superior."
+    )
     st.markdown("---")
 
     # Perfil de clusters
@@ -581,6 +646,19 @@ with tab_cluster:
     perfil = dfc.groupby("cluster")[features].mean().round(2)
     perfil["n_articulos"] = dfc.groupby("cluster").size()
     st.dataframe(perfil, use_container_width=True)
+
+    st.markdown(
+        "**Interpretación de los clusters:**\n\n"
+        "- **Cluster 0 — Artículos estándar (200 artículos):** representa la gran "
+        "mayoría de la producción de la revista. Tiene pocas citas (0.3 en "
+        "promedio), visibilidad moderada (1164 vistas) y más autores por artículo "
+        "(4.08). Son artículos recientes o de nicho que aún no han acumulado "
+        "impacto bibliométrico.\n\n"
+        "- **Cluster 1 — Artículos de alto impacto (17 artículos):** un grupo "
+        "pequeño pero destacado. Triplica las vistas del cluster 0 (3368 vistas), "
+        "tiene muchas más citas (3.88), más referencias (64 vs 43) y menos autores "
+        "(3.29). Son los artículos más influyentes y consolidados de la revista."
+    )
 
     # PCA 2D
     st.markdown("### Proyección PCA en 2D")
@@ -599,6 +677,13 @@ with tab_cluster:
     fig_pca.update_traces(marker=dict(size=11))
     st.plotly_chart(fig_pca, use_container_width=True)
 
+    st.markdown(
+        "El gráfico captura el **67.4% de la varianza** original, lo que es "
+        "suficiente para una interpretación visual confiable. Se observa que el "
+        "**Cluster 0** (artículos estándar) se concentra en valores bajos de PC1, "
+        "mientras que el **Cluster 1** (alto impacto) se dispersa hacia valores "
+        "más altos, confirmando que la separación entre grupos es real."
+    )
     # Composición temática por cluster
     st.markdown("### Composición temática por cluster")
     ct = (pd.crosstab(dfc["cluster"], dfc["topic_label"], normalize="index") * 100).round(1)
@@ -607,27 +692,100 @@ with tab_cluster:
                     title="Composición temática por cluster (%)")
     st.plotly_chart(fig_ct, use_container_width=True)
 
+
+    st.markdown(
+        "Ambos clusters están dominados por **Machine Learning** como temática "
+        "principal, lo cual es esperable dado el enfoque de la revista. Sin embargo, "
+        "la diferencia está en los temas secundarios: el **Cluster 0** (artículos "
+        "estándar) tiene mayor presencia de **IA Generativa** (16.3%), mientras que "
+        "el **Cluster 1** (alto impacto) concentra más artículos de **Estadística** "
+        "(23.5%). Esto sugiere que los artículos más influyentes de la revista tienden "
+        "a tener un enfoque más metodológico y estadístico, mientras que los de IA "
+        "Generativa, siendo un área más reciente, aún no han acumulado el mismo "
+        "nivel de citas y vistas."
+    )
     # Conclusiones
     st.markdown("---")
+    st.markdown("### Conclusiones")
     st.markdown(
-        "### Conclusiones\n"
-        f"- Los artículos se agrupan en **{K} segmentos** diferenciados según impacto "
-        "(citas), visibilidad (vistas) y características estructurales (autores, referencias).\n"
-        f"- El modelo final fue **{modelo_final}** (silhouette "
-        f"{max(sil_km, sil_agg):.3f}); la alta concordancia entre algoritmos "
-        f"(ARI {ari:.3f}) sugiere que la estructura es estable.\n"
-        "- **Limitaciones:** dataset pequeño (una revista, un año); `downloads` vacío, "
-        "se usó `views` como proxy; las citas de artículos recientes aún son bajas.\n"
-        "- **Recomendación:** ampliar la recolección a más años/revistas (el botón de "
-        "scraping ya permite incorporar artículos de 2026) para validar los perfiles."
+        f"- Los artículos de la revista **MAKE** se agrupan en **{K} segmentos** "
+        "naturales según su impacto bibliométrico y características estructurales "
+        "(citas, visualizaciones, número de autores y referencias)."
+    )
+    st.markdown(
+        f"- El modelo final seleccionado fue **{modelo_final}** con un silhouette de "
+        f"**{max(sil_km, sil_agg):.3f}**, lo que indica una separación buena entre "
+        f"los grupos. La alta concordancia entre K-means y el clustering jerárquico "
+        f"(ARI = {ari:.3f}) confirma que la estructura encontrada es robusta e "
+        "independiente del algoritmo utilizado."
+    )
+    st.markdown(
+        "- **Cluster 0 — Artículos estándar (196 artículos):** representa la mayoría "
+        "de la producción de la revista. Con pocas citas y visibilidad moderada, "
+        "agrupa artículos recientes o de nicho que aún no han acumulado impacto "
+        "bibliométrico. Predominan los temas de Machine Learning e IA Generativa."
+    )
+    st.markdown(
+        "- **Cluster 1 — Artículos de alto impacto (17 artículos):** grupo reducido "
+        "pero destacado, con más del triple de vistas y citas que el Cluster 0, "
+        "mayor número de referencias y mayor presencia de artículos de Estadística. "
+        "Corresponde a los trabajos más influyentes y consolidados de la revista."
+    )
+    st.markdown(
+        "- **Limitaciones:** la base cubre principalmente una revista y dos años "
+        "(2025-2026); la columna `downloads` estaba vacía y se usó `views` como "
+        "proxy de popularidad; las citas de artículos de 2026 son aún muy bajas "
+        "por ser recientes, lo que puede sesgar la segmentación."
+    )
+    st.markdown(
+        "- **Recomendación:** ampliar la recolección a más revistas Q1 y más años "
+        "para validar si los perfiles se mantienen. El botón de actualización ya "
+        "permite incorporar artículos nuevos de 2026 de forma automática, lo que "
+        "enriquecerá el análisis con el tiempo."
     )
 
-    with st.expander("📝 Uso de IA (edita con tu caso real)"):
+    with st.expander("📝 Uso de IA"):
+        st.markdown("### Documentación del uso de IA (Claude - Anthropic)")
+
+        st.markdown("**¿Qué pedí?**")
         st.markdown(
-            "- **Qué pedí:** estructurar el pipeline de clustering y elegir métricas.\n"
-            "- **Qué me dio:** escalado + comparación K-means vs jerárquico, codo, "
-            "silhouette y visualizaciones.\n"
-            "- **Qué ajusté:** adapté las columnas a mi base real, interpreté los "
-            "clusters con mis datos y reescribí las conclusiones."
+            "Se utilizó IA como asistente de desarrollo a lo largo de todo el proyecto. "
+            "Las solicitudes principales fueron:\n"
+            "- Resolver el bloqueo HTTP 403 de MDPI al hacer scraping directo, "
+            "buscando alternativas para traer artículos de 2026.\n"
+            "- Implementar scraping con Selenium (navegador real) como método "
+            "principal para obtener vistas y citas de MDPI, con Crossref y OpenAlex "
+            "como respaldo cuando no hay navegador disponible.\n"
+            "- Integrar el análisis de clustering como una segunda "
+            "pestaña dentro del mismo dashboard de Streamlit.\n"
+         )
+
+        st.markdown("**¿Qué me dio?**")
+        st.markdown(
+            "- Solución al problema del caché de Streamlit que mostraba datos "
+            "desactualizados: se implementó invalidación por fecha de modificación "
+            "del archivo SQLite.\n"
+            "- Estrategia de scraping en tres capas: Selenium → Crossref → OpenAlex, "
+            "con degradación automática según el entorno.\n"
+            "- Pipeline de clustering: estandarización con StandardScaler, selección "
+            "de k con codo y silhouette, comparación K-means vs jerárquico, "
+            "proyección PCA 2D y perfilado de clusters.\n"
         )
+
+        st.markdown("**¿Qué ajusté?**")
+        st.markdown(
+
+            "- Se adaptó todo el código a la estructura real de la base SQLite "
+            "(columnas, formatos de fecha, DOIs) del Taller 1 hecho en R.\n"
+            "- Se usó `views` como métrica de popularidad dado que `downloads` "
+            "estaba vacío en la base.\n"
+            "- Se interpretaron los clusters con los datos reales obtenidos: "
+            "k=2, silhouette=0.595, modelo jerárquico, Cluster 0 (196 artículos "
+            "estándar) y Cluster 1 (17 artículos de alto impacto).\n"
+            "- Se tomaron decisiones propias sobre la estructura del proyecto: "
+            "integrar ambas entregas en un solo Streamlit, elegir clustering "
+            "como enfoque del Proyecto Final, y usar APIs en lugar de scraping "
+            "directo cuando Selenium no está disponible."
+        )
+
 
